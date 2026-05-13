@@ -253,6 +253,63 @@ def set_blueprint_variable_properties(
         }
 
 
+def delete_variable(
+    unreal_connection,
+    blueprint_name: str,
+    variable_name: str
+) -> Dict[str, Any]:
+    """
+    Delete a member variable from a Blueprint.
+
+    Removes the entry from ``Blueprint->NewVariables`` and also removes any
+    VariableGet / VariableSet nodes that reference it (via Unreal's
+    ``FBlueprintEditorUtils::RemoveMemberVariable``). The Blueprint is
+    recompiled afterwards so it stays valid.
+
+    Inherited variables (from C++ parent classes or parent Blueprints) cannot
+    be deleted; the call fails with a clear error in that case.
+
+    Args:
+        unreal_connection: Connection to Unreal Engine
+        blueprint_name: Path or name of the Blueprint to modify
+        variable_name: Name of the variable to delete (must be a member of
+            this Blueprint — not inherited)
+
+    Returns:
+        Dictionary containing:
+            - success (bool): Whether the variable was deleted
+            - variable_name (str): Name of the deleted variable
+            - removed_node_count (int): How many VariableGet/Set nodes were
+              cleaned up across event graphs and function graphs
+            - error (str): Error message if failed (e.g. variable not found
+              or is inherited)
+
+    Example:
+        >>> create_variable(unreal, "MyBP", "_probe", "float")
+        >>> delete_variable(unreal, "MyBP", "_probe")
+        {'success': True, 'variable_name': '_probe', 'removed_node_count': 0, ...}
+    """
+    try:
+        params = {
+            "blueprint_name": blueprint_name,
+            "variable_name": variable_name,
+        }
+        response = unreal_connection.send_command("delete_variable", params)
+        if response.get("success"):
+            logger.info(
+                f"Deleted variable '{variable_name}' from {blueprint_name} "
+                f"(removed {response.get('removed_node_count', 0)} reference node(s))"
+            )
+        else:
+            logger.error(
+                f"Failed to delete variable: {response.get('error', 'Unknown error')}"
+            )
+        return response
+    except Exception as e:
+        logger.error(f"Exception in delete_variable: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def create_float_variable(
     unreal_connection,
     blueprint_name: str,

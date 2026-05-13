@@ -2,6 +2,9 @@
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "EdGraphSchema_K2.h"
+#include "K2Node_Variable.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Subsystems/AssetEditorSubsystem.h"
@@ -459,6 +462,99 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
     Result->SetObjectField("properties_updated", UpdatedProperties);
     Result->SetStringField("message", "Variable properties updated successfully");
 
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FBPVariables::DeleteVariable(const TSharedPtr<FJsonObject>& Params)
+{
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", TEXT("Missing 'blueprint_name' parameter"));
+        return Result;
+    }
+
+    FString VariableName;
+    if (!Params->TryGetStringField(TEXT("variable_name"), VariableName))
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", TEXT("Missing 'variable_name' parameter"));
+        return Result;
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+        return Result;
+    }
+
+    const FName VarFName(*VariableName);
+
+    // Confirm the variable exists as a member of THIS Blueprint. Inherited C++
+    // / parent-BP variables don't live in NewVariables and can't be deleted.
+    bool bFound = false;
+    for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+    {
+        if (Var.VarName == VarFName)
+        {
+            bFound = true;
+            break;
+        }
+    }
+    if (!bFound)
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", FString::Printf(
+            TEXT("Variable '%s' not found on blueprint '%s' (note: inherited variables cannot be deleted)"),
+            *VariableName, *BlueprintName));
+        return Result;
+    }
+
+    // Count referencing UK2Node_VariableGet / UK2Node_VariableSet nodes across
+    // event graphs and function graphs so the response can report how many were
+    // touched. RemoveMemberVariable below handles the actual removal/repair.
+    int32 RemovedNodeCount = 0;
+    auto CountRefsIn = [&RemovedNodeCount, &VarFName](UEdGraph* Graph)
+    {
+        if (!Graph)
+        {
+            return;
+        }
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (UK2Node_Variable* VarNode = Cast<UK2Node_Variable>(Node))
+            {
+                if (VarNode->GetVarName() == VarFName)
+                {
+                    ++RemovedNodeCount;
+                }
+            }
+        }
+    };
+    for (UEdGraph* Page : Blueprint->UbergraphPages) { CountRefsIn(Page); }
+    for (UEdGraph* FuncGraph : Blueprint->FunctionGraphs) { CountRefsIn(FuncGraph); }
+
+    // FBlueprintEditorUtils::RemoveMemberVariable:
+    //   - removes the entry from Blueprint->NewVariables
+    //   - removes referencing VariableGet/Set nodes (and disconnects pins)
+    //   - marks the Blueprint dirty
+    FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VarFName);
+
+    Blueprint->MarkPackageDirty();
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    Result->SetBoolField("success", true);
+    Result->SetStringField("variable_name", VariableName);
+    Result->SetNumberField("removed_node_count", RemovedNodeCount);
+    Result->SetStringField("message", FString::Printf(
+        TEXT("Deleted variable '%s' and %d referencing node(s)."),
+        *VariableName, RemovedNodeCount));
     return Result;
 }
 

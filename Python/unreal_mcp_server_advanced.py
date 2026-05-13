@@ -2494,6 +2494,45 @@ def set_blueprint_variable_properties(
         return {"success": False, "message": str(e)}
 
 @mcp.tool()
+def delete_variable(
+    blueprint_name: str,
+    variable_name: str
+) -> Dict[str, Any]:
+    """
+    Delete a member variable from a Blueprint.
+
+    Removes the entry from the Blueprint's NewVariables list and any
+    VariableGet / VariableSet nodes that reference it across all graphs.
+    The Blueprint is recompiled afterwards.
+
+    Mirrors the existing delete_node / delete_function tools — closes the
+    gap that made probe/disposable variables permanently pollute Blueprints.
+
+    Args:
+        blueprint_name: Path or name of the Blueprint to modify
+        variable_name: Name of the variable to delete. Must be a member of
+            this Blueprint; inherited variables (from C++ or parent BP)
+            cannot be deleted and the call returns an error.
+
+    Returns:
+        Dictionary with:
+            - success (bool)
+            - variable_name (str)
+            - removed_node_count (int): how many referencing nodes were
+              cleaned up across event graphs and function graphs
+            - error (str) when success is False
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+    try:
+        return variable_manager.delete_variable(unreal, blueprint_name, variable_name)
+    except Exception as e:
+        logger.error(f"delete_variable error: {e}")
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
 def add_event_node(
     blueprint_name: str,
     event_name: str,

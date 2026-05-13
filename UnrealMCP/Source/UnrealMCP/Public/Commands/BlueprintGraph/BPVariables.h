@@ -30,6 +30,15 @@ public:
      */
     static TSharedPtr<FJsonObject> SetVariableProperties(const TSharedPtr<FJsonObject>& Params);
 
+    /**
+     * Deletes a member variable from a Blueprint. Removes the entry from
+     * Blueprint->NewVariables and any VariableGet/VariableSet nodes that
+     * reference it (FBlueprintEditorUtils::RemoveMemberVariable handles both).
+     * @param Params JSON containing blueprint_name, variable_name.
+     * @return JSON with {success, variable_name, removed_node_count}.
+     */
+    static TSharedPtr<FJsonObject> DeleteVariable(const TSharedPtr<FJsonObject>& Params);
+
 private:
     /**
      * Converts a type string to FEdGraphPinType
