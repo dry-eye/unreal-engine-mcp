@@ -1,3 +1,5 @@
+<!-- Fork note (dry-eye): extensions live in separate files. See FORK.md for what's different and how the cross-project NTFS-junction sharing works. -->
+
 <p align="center">
   <img src="assets/logo.png" alt="Flopperam" width="120" />
 </p>

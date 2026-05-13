@@ -54,6 +54,9 @@
 #include "Commands/EpicUnrealMCPEditorCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
+#include "Commands/UnrealMCPAnimCommands.h"
+#include "Commands/UnrealMCPControlRigCommands.h"
+#include "Commands/UnrealMCPPCGCommands.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 
 // Default settings
@@ -65,6 +68,9 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     EditorCommands = MakeShared<FEpicUnrealMCPEditorCommands>();
     BlueprintCommands = MakeShared<FEpicUnrealMCPBlueprintCommands>();
     BlueprintGraphCommands = MakeShared<FEpicUnrealMCPBlueprintGraphCommands>();
+    AnimCommands = MakeShared<FUnrealMCPAnimCommands>();
+    ControlRigCommands = MakeShared<FUnrealMCPControlRigCommands>();
+    PCGCommands = MakeShared<FUnrealMCPPCGCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -72,6 +78,9 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     EditorCommands.Reset();
     BlueprintCommands.Reset();
     BlueprintGraphCommands.Reset();
+    AnimCommands.Reset();
+    ControlRigCommands.Reset();
+    PCGCommands.Reset();
 }
 
 // Initialize subsystem
@@ -245,6 +254,21 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("get_blueprint_function_details"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
+            }
+            // AnimBlueprint read commands
+            else if (CommandType == TEXT("read_anim_blueprint"))
+            {
+                ResultJson = AnimCommands->HandleCommand(CommandType, Params);
+            }
+            // Control Rig read commands
+            else if (CommandType == TEXT("read_control_rig"))
+            {
+                ResultJson = ControlRigCommands->HandleCommand(CommandType, Params);
+            }
+            // PCG read commands
+            else if (CommandType == TEXT("read_pcg_graph"))
+            {
+                ResultJson = PCGCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||
