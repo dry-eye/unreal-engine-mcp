@@ -2746,6 +2746,76 @@ def set_node_property(
 
 
 @mcp.tool()
+def set_pin_default_value(
+    blueprint_name: str,
+    node_id: str,
+    pin_name: str,
+    default_value: Optional[str] = None,
+    default_object: Optional[str] = None,
+    default_text_value: Optional[str] = None,
+    function_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Set a literal default value on a pin of an existing Blueprint node.
+
+    Many nodes use pin literals instead of wired inputs — Get All Actors Of
+    Class wants a class on its ActorClass pin, Spawn Actor takes a class on
+    Class, math constant nodes take floats on B, FinishTest takes an enum
+    name on Result. This tool writes those literals.
+
+    UE5 pins have three independent default slots; pass whichever applies
+    to the pin's type. At least one is required:
+
+    - ``default_value`` for primitives (bool / int / float / byte / enum-name)
+      and for class pins as a /Script path or /Game asset path.
+    - ``default_object`` for object & asset reference pins; resolved via
+      LoadObject so a full path is needed.
+    - ``default_text_value`` for FText pins.
+
+    Args:
+        blueprint_name: Path or name of the Blueprint
+        node_id: NodeGuid or GetName() of the target node (as returned by add_node)
+        pin_name: Name of the pin on that node (e.g. "ActorClass", "B", "InString")
+        default_value: String literal for primitive / class-path pins
+        default_object: UObject path for object / asset refs
+        default_text_value: Body string for FText pins
+        function_name: Function graph name (optional; null = EventGraph)
+
+    Returns:
+        Dictionary with success, the actually stored defaults (truthful echo
+        so the caller can verify schema validation accepted the value), or
+        an error.
+
+    Example:
+        # Wire a Get All Actors Of Class node to a class literal
+        set_pin_default_value(
+            blueprint_name="/Game/MyBP",
+            node_id="K2Node_GetAllActorsOfClass_0",
+            pin_name="ActorClass",
+            default_object="/Script/Engine.Pawn",
+        )
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+    try:
+        return node_properties.set_pin_default_value(
+            unreal,
+            blueprint_name,
+            node_id,
+            pin_name,
+            default_value=default_value,
+            default_object=default_object,
+            default_text_value=default_text_value,
+            function_name=function_name,
+        )
+    except Exception as e:
+        logger.error(f"set_pin_default_value error: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
 def create_function(
     blueprint_name: str,
     function_name: str,

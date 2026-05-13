@@ -42,6 +42,26 @@ public:
 	 */
 	static TSharedPtr<FJsonObject> EditNode(const TSharedPtr<FJsonObject>& Params);
 
+	/**
+	 * Set a literal default value on a pin of an existing Blueprint node.
+	 * Mirrors what the Blueprint editor exposes via the in-pin literal box /
+	 * class-picker dropdown / text entry; needed because many nodes
+	 * (Get All Actors Of Class, Spawn Actor, Cast, math constants, etc.)
+	 * rely on pin defaults rather than wired inputs.
+	 *
+	 * @param Params JSON parameters containing:
+	 *   - blueprint_name (string)
+	 *   - node_id (string)            : NodeGuid or GetName() of the target node
+	 *   - pin_name (string)           : Name of the pin on that node
+	 *   - default_value (string, opt) : Literal string for primitives / enum names / class paths
+	 *   - default_object (string, opt): UObject path for object / class refs (loaded via LoadObject)
+	 *   - default_text_value (string, opt): Literal for FText pins
+	 *   - function_name (string, opt) : Function graph name (null = EventGraph)
+	 *   At least one of default_value / default_object / default_text_value is required.
+	 * @return JSON response with success and the actually-stored defaults, or an error.
+	 */
+	static TSharedPtr<FJsonObject> SetPinDefaultValue(const TSharedPtr<FJsonObject>& Params);
+
 private:
 	/**
 	 * Get the appropriate graph (EventGraph or Function Graph)

@@ -51,6 +51,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleCommand(cons
     {
         return HandleSetNodeProperty(Params);
     }
+    else if (CommandType == TEXT("set_pin_default_value"))
+    {
+        return HandleSetPinDefaultValue(Params);
+    }
     else if (CommandType == TEXT("create_function"))
     {
         return HandleCreateFunction(Params);
@@ -290,6 +294,33 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleSetNodePrope
     }
 
     return FNodePropertyManager::SetNodeProperty(Params);
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleSetPinDefaultValue(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString NodeID;
+    if (!Params->TryGetStringField(TEXT("node_id"), NodeID))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'node_id' parameter"));
+    }
+
+    FString PinName;
+    if (!Params->TryGetStringField(TEXT("pin_name"), PinName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'pin_name' parameter"));
+    }
+
+    UE_LOG(LogTemp, Display,
+        TEXT("FEpicUnrealMCPBlueprintGraphCommands::HandleSetPinDefaultValue: pin '%s' on node '%s' in blueprint '%s'"),
+        *PinName, *NodeID, *BlueprintName);
+
+    return FNodePropertyManager::SetPinDefaultValue(Params);
 }
 
 

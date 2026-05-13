@@ -44,6 +44,9 @@ private:
     // Set node property in Blueprint graph (F21)
     TSharedPtr<FJsonObject> HandleSetNodeProperty(const TSharedPtr<FJsonObject>& Params);
 
+    // Set a literal default value on a pin
+    TSharedPtr<FJsonObject> HandleSetPinDefaultValue(const TSharedPtr<FJsonObject>& Params);
+
     // Create function in Blueprint
     TSharedPtr<FJsonObject> HandleCreateFunction(const TSharedPtr<FJsonObject>& Params);
 

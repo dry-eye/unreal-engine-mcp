@@ -279,6 +279,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_event_node") ||
                      CommandType == TEXT("delete_node") ||
                      CommandType == TEXT("set_node_property") ||
+                     CommandType == TEXT("set_pin_default_value") ||
                      CommandType == TEXT("create_function") ||
                      CommandType == TEXT("add_function_input") ||
                      CommandType == TEXT("add_function_output") ||
