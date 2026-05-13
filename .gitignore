@@ -105,3 +105,5 @@ MCPGameProject/Config/DefaultEditorPerProjectUserSettings.ini
 # Clang
 .clang-format
 .clangd
+/.claude/worktrees
+/UnrealMCP/Binaries
