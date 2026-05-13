@@ -93,7 +93,18 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 
 		if (!Graph)
 		{
-			return CreateErrorResponse(FString::Printf(TEXT("Function graph not found: %s"), *FunctionName));
+			// `function_name` in node_params selects which function graph to add the node to
+			// — it is NOT the target of a CallFunction node. The naming overlap is a common
+			// source of confusion, so call it out explicitly when CallFunction is in play.
+			FString Hint;
+			if (NodeType.Equals(TEXT("CallFunction"), ESearchCase::IgnoreCase))
+			{
+				Hint = TEXT(" (note: for CallFunction nodes, use 'target_function' and 'target_class' "
+					"to pick the call target; 'function_name' only selects which function graph to "
+					"insert the node into)");
+			}
+			return CreateErrorResponse(FString::Printf(
+				TEXT("Function graph not found: %s%s"), *FunctionName, *Hint));
 		}
 	}
 	else

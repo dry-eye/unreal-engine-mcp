@@ -707,16 +707,33 @@ def analyze_blueprint_graph(
     """
     Analyze a specific graph within a Blueprint (EventGraph, functions, etc.)
     and provide detailed information about nodes, connections, and execution flow.
-    
+
+    For each K2Node_Composite (collapsed/composite graph node) the response
+    includes a ``subgraph`` field with the recursively-serialized contents,
+    so callers can read into user-organised BPs without extra round-trips.
+
+    ``graph_name`` resolution order:
+        1. UbergraphPages by exact name (EventGraph etc.)
+        2. FunctionGraphs by exact name
+        3. Any composite sub-graph reachable from those, matched by:
+           - the composite node name (e.g. ``K2Node_Composite_0``)
+           - the BoundGraph name
+           - the composite's user-facing title (substring match — e.g.
+             passing ``"InitTrackSpline"`` finds the composite labelled
+             "InitTrackSpline\\nCollapsed Graph")
+           - the NodeGuid
+
     Args:
         blueprint_path: Full path to the Blueprint asset
-        graph_name: Name of the graph to analyze ("EventGraph", function name, etc.)
+        graph_name: Name of the graph to analyze ("EventGraph", function name,
+            composite node name, composite title, etc.)
         include_node_details: Include detailed node properties and settings
         include_pin_connections: Include all pin-to-pin connections
         trace_execution_flow: Trace the execution flow through the graph
-    
+
     Returns:
-        Dictionary with graph analysis including nodes, connections, and flow
+        Dictionary with graph analysis including nodes, connections, and flow.
+        Composite nodes carry a nested ``subgraph`` object (same shape).
     """
     unreal = get_unreal_connection()
     if not unreal:
@@ -2261,7 +2278,8 @@ def create_variable(
     is_public: bool = False,
     tooltip: str = "",
     category: str = "Default",
-    variable_subtype_class: Optional[str] = None
+    variable_subtype_class: Optional[str] = None,
+    is_array: bool = False
 ) -> Dict[str, Any]:
     """
     Create a variable in a Blueprint.
@@ -2286,6 +2304,8 @@ def create_variable(
             full UClass / UScriptStruct / UEnum path (e.g. "/Script/Engine.SplineComponent").
             Short names accepted as fallback. Required when ``variable_type`` is a
             reference/struct/enum type — request fails otherwise.
+        is_array: Create the variable as an Array of the resolved element type
+            (e.g. ``TArray<FVehicleTestRecord>``). Defaults to False.
 
     Returns:
         Dictionary with success status and variable details
@@ -2306,6 +2326,7 @@ def create_variable(
             tooltip=tooltip,
             category=category,
             variable_subtype_class=variable_subtype_class,
+            is_array=is_array,
         )
 
         return result
@@ -2320,6 +2341,7 @@ def set_blueprint_variable_properties(
     var_name: Optional[str] = None,
     var_type: Optional[str] = None,
     variable_subtype_class: Optional[str] = None,
+    is_array: Optional[bool] = None,
     is_blueprint_readable: Optional[bool] = None,
     is_blueprint_writable: Optional[bool] = None,
     is_editable: Optional[bool] = None,
@@ -2460,6 +2482,7 @@ def set_blueprint_variable_properties(
             var_name=var_name,
             var_type=var_type,
             variable_subtype_class=variable_subtype_class,
+            is_array=is_array,
             is_blueprint_readable=is_blueprint_readable,
             is_blueprint_writable=is_blueprint_writable,
             is_editable=is_editable,
@@ -2485,6 +2508,45 @@ def set_blueprint_variable_properties(
         return result
     except Exception as e:
         logger.error(f"set_blueprint_variable_properties error: {e}")
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
+def delete_variable(
+    blueprint_name: str,
+    variable_name: str
+) -> Dict[str, Any]:
+    """
+    Delete a member variable from a Blueprint.
+
+    Removes the entry from the Blueprint's NewVariables list and any
+    VariableGet / VariableSet nodes that reference it across all graphs.
+    The Blueprint is recompiled afterwards.
+
+    Mirrors the existing delete_node / delete_function tools — closes the
+    gap that made probe/disposable variables permanently pollute Blueprints.
+
+    Args:
+        blueprint_name: Path or name of the Blueprint to modify
+        variable_name: Name of the variable to delete. Must be a member of
+            this Blueprint; inherited variables (from C++ or parent BP)
+            cannot be deleted and the call returns an error.
+
+    Returns:
+        Dictionary with:
+            - success (bool)
+            - variable_name (str)
+            - removed_node_count (int): how many referencing nodes were
+              cleaned up across event graphs and function graphs
+            - error (str) when success is False
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+    try:
+        return variable_manager.delete_variable(unreal, blueprint_name, variable_name)
+    except Exception as e:
+        logger.error(f"delete_variable error: {e}")
         return {"success": False, "message": str(e)}
 
 @mcp.tool()
@@ -2697,6 +2759,76 @@ def set_node_property(
         return result
     except Exception as e:
         logger.error(f"set_node_property error: {e}", exc_info=True)
+        return {"success": False, "message": str(e)}
+
+
+@mcp.tool()
+def set_pin_default_value(
+    blueprint_name: str,
+    node_id: str,
+    pin_name: str,
+    default_value: Optional[str] = None,
+    default_object: Optional[str] = None,
+    default_text_value: Optional[str] = None,
+    function_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Set a literal default value on a pin of an existing Blueprint node.
+
+    Many nodes use pin literals instead of wired inputs — Get All Actors Of
+    Class wants a class on its ActorClass pin, Spawn Actor takes a class on
+    Class, math constant nodes take floats on B, FinishTest takes an enum
+    name on Result. This tool writes those literals.
+
+    UE5 pins have three independent default slots; pass whichever applies
+    to the pin's type. At least one is required:
+
+    - ``default_value`` for primitives (bool / int / float / byte / enum-name)
+      and for class pins as a /Script path or /Game asset path.
+    - ``default_object`` for object & asset reference pins; resolved via
+      LoadObject so a full path is needed.
+    - ``default_text_value`` for FText pins.
+
+    Args:
+        blueprint_name: Path or name of the Blueprint
+        node_id: NodeGuid or GetName() of the target node (as returned by add_node)
+        pin_name: Name of the pin on that node (e.g. "ActorClass", "B", "InString")
+        default_value: String literal for primitive / class-path pins
+        default_object: UObject path for object / asset refs
+        default_text_value: Body string for FText pins
+        function_name: Function graph name (optional; null = EventGraph)
+
+    Returns:
+        Dictionary with success, the actually stored defaults (truthful echo
+        so the caller can verify schema validation accepted the value), or
+        an error.
+
+    Example:
+        # Wire a Get All Actors Of Class node to a class literal
+        set_pin_default_value(
+            blueprint_name="/Game/MyBP",
+            node_id="K2Node_GetAllActorsOfClass_0",
+            pin_name="ActorClass",
+            default_object="/Script/Engine.Pawn",
+        )
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+    try:
+        return node_properties.set_pin_default_value(
+            unreal,
+            blueprint_name,
+            node_id,
+            pin_name,
+            default_value=default_value,
+            default_object=default_object,
+            default_text_value=default_text_value,
+            function_name=function_name,
+        )
+    except Exception as e:
+        logger.error(f"set_pin_default_value error: {e}", exc_info=True)
         return {"success": False, "message": str(e)}
 
 

@@ -7,6 +7,7 @@
 #include "K2Node_Event.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
+#include "K2Node_Composite.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
@@ -1265,6 +1266,8 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReadBlueprintCont
     if (bIncludeComponents)
     {
         TArray<TSharedPtr<FJsonValue>> ComponentArray;
+        TSet<FName> SeenComponentNames;
+
         if (Blueprint->SimpleConstructionScript)
         {
             for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
@@ -1272,13 +1275,49 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReadBlueprintCont
                 if (Node && Node->ComponentTemplate)
                 {
                     TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
-                    CompObj->SetStringField(TEXT("name"), Node->GetVariableName().ToString());
+                    const FName VarName = Node->GetVariableName();
+                    CompObj->SetStringField(TEXT("name"), VarName.ToString());
                     CompObj->SetStringField(TEXT("class"), Node->ComponentTemplate->GetClass()->GetName());
                     CompObj->SetBoolField(TEXT("is_root"), Node == Blueprint->SimpleConstructionScript->GetDefaultSceneRootNode());
+                    CompObj->SetBoolField(TEXT("inherited"), false);
+                    ComponentArray.Add(MakeShared<FJsonValueObject>(CompObj));
+                    SeenComponentNames.Add(VarName);
+                }
+            }
+        }
+
+        // Inherited components: walk CDO's components, skip ones already seen.
+        if (UClass* GeneratedClass = Blueprint->GeneratedClass)
+        {
+            if (AActor* CDO = Cast<AActor>(GeneratedClass->GetDefaultObject()))
+            {
+                TArray<UActorComponent*> AllComponents;
+                CDO->GetComponents(AllComponents);
+                for (UActorComponent* Comp : AllComponents)
+                {
+                    if (!Comp) continue;
+                    if (Comp->IsEditorOnly()) continue;
+                    if (Comp->IsCreatedByConstructionScript()) continue;
+
+                    const FName CompName = Comp->GetFName();
+                    if (SeenComponentNames.Contains(CompName)) continue;
+
+                    TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
+                    CompObj->SetStringField(TEXT("name"), CompName.ToString());
+                    CompObj->SetStringField(TEXT("class"), Comp->GetClass()->GetName());
+                    CompObj->SetBoolField(TEXT("is_root"), CDO->GetRootComponent() == Comp);
+                    CompObj->SetBoolField(TEXT("inherited"), true);
+                    UClass* OwnerClass = Comp->GetClass();
+                    if (UClass* TypedOwner = Comp->GetTypedOuter<UClass>())
+                    {
+                        OwnerClass = TypedOwner;
+                    }
+                    CompObj->SetStringField(TEXT("parent_class"), OwnerClass ? OwnerClass->GetName() : TEXT(""));
                     ComponentArray.Add(MakeShared<FJsonValueObject>(CompObj));
                 }
             }
         }
+
         ResultObj->SetArrayField(TEXT("components"), ComponentArray);
     }
 
@@ -1297,6 +1336,168 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReadBlueprintCont
 
     ResultObj->SetBoolField(TEXT("success"), true);
     return ResultObj;
+}
+
+namespace
+{
+    // Forward decl: defined below so it can recurse via the function-pointer
+    // call rather than via name (helps when nested in an anonymous namespace).
+    TSharedPtr<FJsonObject> SerializeGraphRecursive(
+        UEdGraph* Graph,
+        bool bIncludeNodeDetails,
+        bool bIncludePinConnections,
+        int32 MaxRemainingDepth);
+
+    // Resolve a graph_name parameter against composite sub-graphs (BoundGraphs).
+    // Matches by:
+    //   - the composite node's GetName() (e.g. "K2Node_Composite_0")
+    //   - the BoundGraph's GetName() (also usually "K2Node_Composite_0_BoundGraph")
+    //   - the node's listview title (e.g. "InitTrackSpline") via Contains so
+    //     callers can pass the user-facing label without worrying about suffixes
+    //   - the NodeGuid
+    UEdGraph* FindCompositeByName(UEdGraph* Root, const FString& Name)
+    {
+        if (!Root)
+        {
+            return nullptr;
+        }
+        for (UEdGraphNode* N : Root->Nodes)
+        {
+            UK2Node_Composite* Composite = Cast<UK2Node_Composite>(N);
+            if (!Composite)
+            {
+                continue;
+            }
+
+            if (Composite->GetName() == Name ||
+                (Composite->BoundGraph && Composite->BoundGraph->GetName() == Name) ||
+                Composite->NodeGuid.ToString() == Name ||
+                Composite->GetNodeTitle(ENodeTitleType::ListView).ToString().Contains(Name))
+            {
+                return Composite->BoundGraph;
+            }
+
+            // Recurse into nested composites.
+            if (Composite->BoundGraph)
+            {
+                if (UEdGraph* Found = FindCompositeByName(Composite->BoundGraph, Name))
+                {
+                    return Found;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    TSharedPtr<FJsonObject> SerializeGraphRecursive(
+        UEdGraph* Graph,
+        bool bIncludeNodeDetails,
+        bool bIncludePinConnections,
+        int32 MaxRemainingDepth)
+    {
+        TSharedPtr<FJsonObject> GraphData = MakeShared<FJsonObject>();
+        if (!Graph)
+        {
+            return GraphData;
+        }
+
+        GraphData->SetStringField(TEXT("graph_name"), Graph->GetName());
+        GraphData->SetStringField(TEXT("graph_type"), Graph->GetClass()->GetName());
+
+        TArray<TSharedPtr<FJsonValue>> NodeArray;
+        TArray<TSharedPtr<FJsonValue>> ConnectionArray;
+
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (!Node)
+            {
+                continue;
+            }
+
+            TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
+            NodeObj->SetStringField(TEXT("name"), Node->GetName());
+            NodeObj->SetStringField(TEXT("class"), Node->GetClass()->GetName());
+            NodeObj->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+
+            if (bIncludeNodeDetails)
+            {
+                NodeObj->SetNumberField(TEXT("pos_x"), Node->NodePosX);
+                NodeObj->SetNumberField(TEXT("pos_y"), Node->NodePosY);
+                NodeObj->SetBoolField(TEXT("can_rename"), Node->bCanRenameNode);
+            }
+
+            if (bIncludePinConnections)
+            {
+                TArray<TSharedPtr<FJsonValue>> PinArray;
+                for (UEdGraphPin* Pin : Node->Pins)
+                {
+                    if (!Pin)
+                    {
+                        continue;
+                    }
+                    TSharedPtr<FJsonObject> PinObj = MakeShared<FJsonObject>();
+                    PinObj->SetStringField(TEXT("name"), Pin->PinName.ToString());
+                    PinObj->SetStringField(TEXT("type"), Pin->PinType.PinCategory.ToString());
+                    PinObj->SetStringField(TEXT("direction"), Pin->Direction == EGPD_Input ? TEXT("Input") : TEXT("Output"));
+                    PinObj->SetNumberField(TEXT("connections"), Pin->LinkedTo.Num());
+
+                    PinObj->SetStringField(TEXT("sub_category"), Pin->PinType.PinSubCategory.ToString());
+                    if (Pin->PinType.PinSubCategoryObject.IsValid())
+                    {
+                        PinObj->SetStringField(TEXT("sub_category_object"), Pin->PinType.PinSubCategoryObject->GetPathName());
+                    }
+
+                    if (Pin->Direction == EGPD_Input && Pin->LinkedTo.Num() == 0)
+                    {
+                        PinObj->SetStringField(TEXT("default_value"), Pin->DefaultValue);
+                        PinObj->SetStringField(TEXT("autogen_default"), Pin->AutogeneratedDefaultValue);
+                        PinObj->SetStringField(TEXT("default_text_value"), Pin->DefaultTextValue.ToString());
+                        if (Pin->DefaultObject)
+                        {
+                            PinObj->SetStringField(TEXT("default_object"), Pin->DefaultObject->GetPathName());
+                        }
+                    }
+
+                    for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+                    {
+                        if (LinkedPin && LinkedPin->GetOwningNode())
+                        {
+                            TSharedPtr<FJsonObject> ConnObj = MakeShared<FJsonObject>();
+                            ConnObj->SetStringField(TEXT("from_node"), Pin->GetOwningNode()->GetName());
+                            ConnObj->SetStringField(TEXT("from_pin"), Pin->PinName.ToString());
+                            ConnObj->SetStringField(TEXT("to_node"), LinkedPin->GetOwningNode()->GetName());
+                            ConnObj->SetStringField(TEXT("to_pin"), LinkedPin->PinName.ToString());
+                            ConnectionArray.Add(MakeShared<FJsonValueObject>(ConnObj));
+                        }
+                    }
+
+                    PinArray.Add(MakeShared<FJsonValueObject>(PinObj));
+                }
+                NodeObj->SetArrayField(TEXT("pins"), PinArray);
+            }
+
+            // Composite (collapsed graph) -> embed sub-graph inline so callers
+            // can read logic users hid behind a composite node without making a
+            // second call. Skips at the depth limit to guard against any cycle.
+            if (UK2Node_Composite* Composite = Cast<UK2Node_Composite>(Node))
+            {
+                if (Composite->BoundGraph && MaxRemainingDepth > 0)
+                {
+                    NodeObj->SetObjectField(TEXT("subgraph"), SerializeGraphRecursive(
+                        Composite->BoundGraph,
+                        bIncludeNodeDetails,
+                        bIncludePinConnections,
+                        MaxRemainingDepth - 1));
+                }
+            }
+
+            NodeArray.Add(MakeShared<FJsonValueObject>(NodeObj));
+        }
+
+        GraphData->SetArrayField(TEXT("nodes"), NodeArray);
+        GraphData->SetArrayField(TEXT("connections"), ConnectionArray);
+        return GraphData;
+    }
 }
 
 TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAnalyzeBlueprintGraph(const TSharedPtr<FJsonObject>& Params)
@@ -1329,7 +1530,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAnalyzeBlueprintG
 
     // Find the specified graph
     UEdGraph* TargetGraph = nullptr;
-    
+
     // Check event graphs first
     for (UEdGraph* Graph : Blueprint->UbergraphPages)
     {
@@ -1339,7 +1540,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAnalyzeBlueprintG
             break;
         }
     }
-    
+
     // Check function graphs if not found
     if (!TargetGraph)
     {
@@ -1353,101 +1554,45 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAnalyzeBlueprintG
         }
     }
 
+    // Composite (collapsed) sub-graph lookup: callers can pass the composite
+    // node's name ("K2Node_Composite_0"), the BoundGraph's name, the user-
+    // facing title ("InitTrackSpline"), or the NodeGuid. Walk every page +
+    // function graph recursively.
+    if (!TargetGraph)
+    {
+        for (UEdGraph* Page : Blueprint->UbergraphPages)
+        {
+            if (UEdGraph* Found = FindCompositeByName(Page, GraphName))
+            {
+                TargetGraph = Found;
+                break;
+            }
+        }
+    }
+    if (!TargetGraph)
+    {
+        for (UEdGraph* FuncGraph : Blueprint->FunctionGraphs)
+        {
+            if (UEdGraph* Found = FindCompositeByName(FuncGraph, GraphName))
+            {
+                TargetGraph = Found;
+                break;
+            }
+        }
+    }
+
     if (!TargetGraph)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Graph not found: %s"), *GraphName));
     }
 
-    TSharedPtr<FJsonObject> GraphData = MakeShared<FJsonObject>();
-    GraphData->SetStringField(TEXT("graph_name"), TargetGraph->GetName());
-    GraphData->SetStringField(TEXT("graph_type"), TargetGraph->GetClass()->GetName());
-
-    // Analyze nodes
-    TArray<TSharedPtr<FJsonValue>> NodeArray;
-    TArray<TSharedPtr<FJsonValue>> ConnectionArray;
-
-    for (UEdGraphNode* Node : TargetGraph->Nodes)
-    {
-        if (Node)
-        {
-            TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
-            NodeObj->SetStringField(TEXT("name"), Node->GetName());
-            NodeObj->SetStringField(TEXT("class"), Node->GetClass()->GetName());
-            NodeObj->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
-
-            if (bIncludeNodeDetails)
-            {
-                NodeObj->SetNumberField(TEXT("pos_x"), Node->NodePosX);
-                NodeObj->SetNumberField(TEXT("pos_y"), Node->NodePosY);
-                NodeObj->SetBoolField(TEXT("can_rename"), Node->bCanRenameNode);
-            }
-
-            // Include pin information if requested
-            if (bIncludePinConnections)
-            {
-                TArray<TSharedPtr<FJsonValue>> PinArray;
-                for (UEdGraphPin* Pin : Node->Pins)
-                {
-                    if (Pin)
-                    {
-                        TSharedPtr<FJsonObject> PinObj = MakeShared<FJsonObject>();
-                        PinObj->SetStringField(TEXT("name"), Pin->PinName.ToString());
-                        PinObj->SetStringField(TEXT("type"), Pin->PinType.PinCategory.ToString());
-                        if (!Pin->PinType.PinSubCategory.IsNone())
-                        {
-                            PinObj->SetStringField(TEXT("sub_type"), Pin->PinType.PinSubCategory.ToString());
-                        }
-                        if (UObject* PinSubObj = Pin->PinType.PinSubCategoryObject.Get())
-                        {
-                            PinObj->SetStringField(TEXT("sub_type_object"), PinSubObj->GetPathName());
-                        }
-                        PinObj->SetStringField(TEXT("direction"), Pin->Direction == EGPD_Input ? TEXT("Input") : TEXT("Output"));
-                        PinObj->SetNumberField(TEXT("connections"), Pin->LinkedTo.Num());
-
-                        // Pin default literal (visible when nothing is connected).
-                        // UEdGraphPin exposes three distinct slots and we surface all of them:
-                        //   DefaultValue     - string-form literal for primitives & class refs
-                        //   DefaultObject    - UObject* literal for object refs
-                        //   DefaultTextValue - FText literal for text pins
-                        // AutogeneratedDefaultValue lets callers tell schema-default apart from
-                        // user-set literals.
-                        PinObj->SetStringField(TEXT("default_value"), Pin->DefaultValue);
-                        PinObj->SetStringField(TEXT("autogenerated_default_value"), Pin->AutogeneratedDefaultValue);
-                        if (Pin->DefaultObject)
-                        {
-                            PinObj->SetStringField(TEXT("default_object"), Pin->DefaultObject->GetPathName());
-                        }
-                        if (!Pin->DefaultTextValue.IsEmpty())
-                        {
-                            PinObj->SetStringField(TEXT("default_text_value"), Pin->DefaultTextValue.ToString());
-                        }
-
-                        // Record connections for this pin
-                        for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
-                        {
-                            if (LinkedPin && LinkedPin->GetOwningNode())
-                            {
-                                TSharedPtr<FJsonObject> ConnObj = MakeShared<FJsonObject>();
-                                ConnObj->SetStringField(TEXT("from_node"), Pin->GetOwningNode()->GetName());
-                                ConnObj->SetStringField(TEXT("from_pin"), Pin->PinName.ToString());
-                                ConnObj->SetStringField(TEXT("to_node"), LinkedPin->GetOwningNode()->GetName());
-                                ConnObj->SetStringField(TEXT("to_pin"), LinkedPin->PinName.ToString());
-                                ConnectionArray.Add(MakeShared<FJsonValueObject>(ConnObj));
-                            }
-                        }
-                        
-                        PinArray.Add(MakeShared<FJsonValueObject>(PinObj));
-                    }
-                }
-                NodeObj->SetArrayField(TEXT("pins"), PinArray);
-            }
-
-            NodeArray.Add(MakeShared<FJsonValueObject>(NodeObj));
-        }
-    }
-
-    GraphData->SetArrayField(TEXT("nodes"), NodeArray);
-    GraphData->SetArrayField(TEXT("connections"), ConnectionArray);
+    // Serialize the target graph (recursive: composite nodes expand inline).
+    constexpr int32 MaxCompositeDepth = 8;
+    TSharedPtr<FJsonObject> GraphData = SerializeGraphRecursive(
+        TargetGraph,
+        bIncludeNodeDetails,
+        bIncludePinConnections,
+        MaxCompositeDepth);
 
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
     ResultObj->SetStringField(TEXT("blueprint_path"), BlueprintPath);
@@ -1512,7 +1657,77 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetBlueprintVaria
         // Replication
         VarObj->SetNumberField(TEXT("replication"), (int32)Variable.ReplicationCondition);
 
+        // Mark source as Blueprint-own
+        VarObj->SetStringField(TEXT("source"), TEXT("blueprint_own"));
+
         VariableArray.Add(MakeShared<FJsonValueObject>(VarObj));
+    }
+
+    // Inherited variables: walk parent class fields via TFieldIterator with IncludeSuper.
+    // Skip properties that the Blueprint redeclares (already added above as blueprint_own).
+    if (UClass* GeneratedClass = Blueprint->GeneratedClass)
+    {
+        TSet<FName> OwnNames;
+        for (const FBPVariableDescription& V : Blueprint->NewVariables)
+        {
+            OwnNames.Add(V.VarName);
+        }
+
+        UObject* CDO = GeneratedClass->GetDefaultObject();
+        UClass* OwnGenClass = GeneratedClass;
+
+        // Iterate properties on parent classes only (skip own GeneratedClass body).
+        for (TFieldIterator<FProperty> It(GeneratedClass, EFieldIteratorFlags::IncludeSuper); It; ++It)
+        {
+            FProperty* Property = *It;
+            if (!Property) continue;
+
+            // Skip properties declared on this Blueprint's own generated class.
+            UClass* OwnerClass = Property->GetOwnerClass();
+            if (!OwnerClass || OwnerClass == OwnGenClass) continue;
+
+            // Skip if Blueprint redeclares it (defensive — name overlap).
+            const FName PropName = Property->GetFName();
+            if (OwnNames.Contains(PropName)) continue;
+
+            // Only expose properties visible to Blueprint to avoid private C++ internals.
+            if (!Property->HasAnyPropertyFlags(CPF_BlueprintVisible | CPF_Edit)) continue;
+
+            // If a specific variable was requested, filter by name.
+            if (bSpecificVariable && PropName.ToString() != VariableName) continue;
+
+            TSharedPtr<FJsonObject> VarObj = MakeShared<FJsonObject>();
+            VarObj->SetStringField(TEXT("name"), PropName.ToString());
+            VarObj->SetStringField(TEXT("type"), Property->GetCPPType());
+            VarObj->SetStringField(TEXT("sub_category"), Property->GetClass()->GetName());
+
+            // Default value from CDO via ExportText.
+            FString DefaultText;
+            if (CDO)
+            {
+                Property->ExportText_InContainer(0, DefaultText, CDO, CDO, CDO, PPF_None);
+            }
+            VarObj->SetStringField(TEXT("default_value"), DefaultText);
+            VarObj->SetStringField(TEXT("friendly_name"), Property->GetDisplayNameText().ToString());
+
+            FString Tooltip = Property->GetMetaData(TEXT("Tooltip"));
+            VarObj->SetStringField(TEXT("tooltip"), Tooltip);
+
+            FString Category = Property->GetMetaData(TEXT("Category"));
+            VarObj->SetStringField(TEXT("category"), Category);
+
+            VarObj->SetBoolField(TEXT("is_editable"), Property->HasAnyPropertyFlags(CPF_Edit));
+            VarObj->SetBoolField(TEXT("is_blueprint_visible"), Property->HasAnyPropertyFlags(CPF_BlueprintVisible));
+            VarObj->SetBoolField(TEXT("is_editable_in_instance"), !Property->HasAnyPropertyFlags(CPF_DisableEditOnInstance));
+            VarObj->SetBoolField(TEXT("is_config"), Property->HasAnyPropertyFlags(CPF_Config));
+
+            // Mark inherited source: C++ parent vs Blueprint parent.
+            const bool bFromBP = Cast<UBlueprintGeneratedClass>(OwnerClass) != nullptr;
+            VarObj->SetStringField(TEXT("source"), bFromBP ? TEXT("bp_parent") : TEXT("cpp_parent"));
+            VarObj->SetStringField(TEXT("parent_class"), OwnerClass->GetName());
+
+            VariableArray.Add(MakeShared<FJsonValueObject>(VarObj));
+        }
     }
 
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();

@@ -30,12 +30,32 @@ public:
      */
     static TSharedPtr<FJsonObject> SetVariableProperties(const TSharedPtr<FJsonObject>& Params);
 
+    /**
+     * Deletes a member variable from a Blueprint. Removes the entry from
+     * Blueprint->NewVariables and any VariableGet/VariableSet nodes that
+     * reference it (FBlueprintEditorUtils::RemoveMemberVariable handles both).
+     * @param Params JSON containing blueprint_name, variable_name.
+     * @return JSON with {success, variable_name, removed_node_count}.
+     */
+    static TSharedPtr<FJsonObject> DeleteVariable(const TSharedPtr<FJsonObject>& Params);
+
 private:
     /**
      * Converts a type string to FEdGraphPinType
-     * Supported types: bool, int, float, string, vector, rotator
+     * Supported types: bool, int, int64, byte, float, double, real, string, name, text,
+     *                  vector, rotator, transform, object, class, soft_object, soft_class,
+     *                  interface, struct, enum
+     * For object/class/interface/soft_object/soft_class/struct/enum, SubtypeClassPath
+     * must reference a loadable UClass / UScriptStruct / UEnum (full path preferred,
+     * e.g. "/Script/Engine.SplineComponent").
+     *
+     * @return true if the type was resolved; false sets OutError with a diagnostic.
      */
-    static FEdGraphPinType GetPinTypeFromString(const FString& TypeString);
+    static bool ResolvePinType(
+        const FString& TypeString,
+        const FString& SubtypeClassPath,
+        FEdGraphPinType& OutPinType,
+        FString& OutError);
 
     /**
      * Sets the default value of a variable

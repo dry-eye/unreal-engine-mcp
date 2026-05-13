@@ -158,6 +158,148 @@ TSharedPtr<FJsonObject> FNodePropertyManager::SetNodeProperty(const TSharedPtr<F
 	return CreateSuccessResponse(PropertyName);
 }
 
+TSharedPtr<FJsonObject> FNodePropertyManager::SetPinDefaultValue(const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Params.IsValid())
+	{
+		return CreateErrorResponse(TEXT("Invalid parameters"));
+	}
+
+	FString BlueprintName;
+	if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+	}
+
+	FString NodeID;
+	if (!Params->TryGetStringField(TEXT("node_id"), NodeID))
+	{
+		return CreateErrorResponse(TEXT("Missing 'node_id' parameter"));
+	}
+
+	FString PinName;
+	if (!Params->TryGetStringField(TEXT("pin_name"), PinName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'pin_name' parameter"));
+	}
+
+	const bool bHasValue = Params->HasField(TEXT("default_value"));
+	const bool bHasObject = Params->HasField(TEXT("default_object"));
+	const bool bHasText = Params->HasField(TEXT("default_text_value"));
+	if (!bHasValue && !bHasObject && !bHasText)
+	{
+		return CreateErrorResponse(TEXT(
+			"At least one of 'default_value', 'default_object', or 'default_text_value' is required"));
+	}
+
+	FString FunctionName;
+	Params->TryGetStringField(TEXT("function_name"), FunctionName);
+
+	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
+	if (!Blueprint)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+	}
+
+	UEdGraph* Graph = GetGraph(Blueprint, FunctionName);
+	if (!Graph)
+	{
+		return CreateErrorResponse(FunctionName.IsEmpty()
+			? FString(TEXT("Blueprint has no event graph"))
+			: FString::Printf(TEXT("Function graph not found: %s"), *FunctionName));
+	}
+
+	UEdGraphNode* Node = FindNodeByID(Graph, NodeID);
+	if (!Node)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Node not found: %s"), *NodeID));
+	}
+
+	UEdGraphPin* Pin = Node->FindPin(*PinName);
+	if (!Pin)
+	{
+		return CreateErrorResponse(FString::Printf(
+			TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeID));
+	}
+
+	// Honour each default field the caller passed; ignore the others. The schema
+	// validates types — TrySetDefaultObject loads the object and rejects type
+	// mismatches (e.g. trying to assign a Texture to a Class pin).
+	const UEdGraphSchema* Schema = Pin->GetSchema();
+
+	if (bHasValue)
+	{
+		FString Value;
+		Params->TryGetStringField(TEXT("default_value"), Value);
+		if (Schema)
+		{
+			Schema->TrySetDefaultValue(*Pin, Value);
+		}
+		else
+		{
+			Pin->DefaultValue = Value;
+		}
+	}
+
+	if (bHasObject)
+	{
+		FString ObjectPath;
+		Params->TryGetStringField(TEXT("default_object"), ObjectPath);
+		UObject* Obj = ObjectPath.IsEmpty()
+			? nullptr
+			: LoadObject<UObject>(nullptr, *ObjectPath);
+		if (!ObjectPath.IsEmpty() && !Obj)
+		{
+			return CreateErrorResponse(FString::Printf(
+				TEXT("default_object path could not be loaded: %s"), *ObjectPath));
+		}
+		if (Schema)
+		{
+			Schema->TrySetDefaultObject(*Pin, Obj);
+		}
+		else
+		{
+			Pin->DefaultObject = Obj;
+		}
+	}
+
+	if (bHasText)
+	{
+		FString TextStr;
+		Params->TryGetStringField(TEXT("default_text_value"), TextStr);
+		FText NewText = FText::FromString(TextStr);
+		if (Schema)
+		{
+			Schema->TrySetDefaultText(*Pin, NewText);
+		}
+		else
+		{
+			Pin->DefaultTextValue = NewText;
+		}
+	}
+
+	Node->PinDefaultValueChanged(Pin);
+	Graph->NotifyGraphChanged();
+	Blueprint->MarkPackageDirty();
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("node_id"), NodeID);
+	Response->SetStringField(TEXT("pin_name"), PinName);
+	// Echo back the actually-stored values so callers can verify what landed.
+	Response->SetStringField(TEXT("default_value"), Pin->DefaultValue);
+	if (Pin->DefaultObject)
+	{
+		Response->SetStringField(TEXT("default_object"), Pin->DefaultObject->GetPathName());
+	}
+	if (!Pin->DefaultTextValue.IsEmpty())
+	{
+		Response->SetStringField(TEXT("default_text_value"), Pin->DefaultTextValue.ToString());
+	}
+	return Response;
+}
+
 TSharedPtr<FJsonObject> FNodePropertyManager::EditNode(const TSharedPtr<FJsonObject>& Params)
 {
 	// Validate parameters

@@ -20,7 +20,8 @@ def create_variable(
     is_public: bool = False,
     tooltip: str = "",
     category: str = "Default",
-    variable_subtype_class: Optional[str] = None
+    variable_subtype_class: Optional[str] = None,
+    is_array: bool = False
 ) -> Dict[str, Any]:
     """
     Create a variable in a Blueprint.
@@ -44,6 +45,9 @@ def create_variable(
         variable_subtype_class: For object/class/struct/enum/interface variables,
             full path to the underlying type (e.g. "/Script/Engine.SplineComponent").
             Short names are accepted as a fallback.
+        is_array: When true, the variable is created as an Array container of
+            the resolved element type (e.g. ``TArray<FVehicleTestRecord>``).
+            Defaults to false (single value).
 
     Returns:
         Dictionary containing:
@@ -84,7 +88,9 @@ def create_variable(
             params["category"] = category
         if variable_subtype_class:
             params["variable_subtype_class"] = variable_subtype_class
-        
+        if is_array:
+            params["is_array"] = is_array
+
         response = unreal_connection.send_command("create_variable", params)
         
         if response.get("success"):
@@ -113,6 +119,7 @@ def set_blueprint_variable_properties(
     var_name: Optional[str] = None,
     var_type: Optional[str] = None,
     variable_subtype_class: Optional[str] = None,
+    is_array: Optional[bool] = None,
     is_blueprint_readable: Optional[bool] = None,
     is_blueprint_writable: Optional[bool] = None,
     is_editable: Optional[bool] = None,
@@ -182,6 +189,8 @@ def set_blueprint_variable_properties(
             params["var_type"] = var_type
         if variable_subtype_class is not None:
             params["variable_subtype_class"] = variable_subtype_class
+        if is_array is not None:
+            params["is_array"] = is_array
         if is_blueprint_readable is not None:
             params["is_blueprint_readable"] = is_blueprint_readable
         if is_blueprint_writable is not None:
@@ -242,6 +251,63 @@ def set_blueprint_variable_properties(
             "success": False,
             "error": str(e)
         }
+
+
+def delete_variable(
+    unreal_connection,
+    blueprint_name: str,
+    variable_name: str
+) -> Dict[str, Any]:
+    """
+    Delete a member variable from a Blueprint.
+
+    Removes the entry from ``Blueprint->NewVariables`` and also removes any
+    VariableGet / VariableSet nodes that reference it (via Unreal's
+    ``FBlueprintEditorUtils::RemoveMemberVariable``). The Blueprint is
+    recompiled afterwards so it stays valid.
+
+    Inherited variables (from C++ parent classes or parent Blueprints) cannot
+    be deleted; the call fails with a clear error in that case.
+
+    Args:
+        unreal_connection: Connection to Unreal Engine
+        blueprint_name: Path or name of the Blueprint to modify
+        variable_name: Name of the variable to delete (must be a member of
+            this Blueprint — not inherited)
+
+    Returns:
+        Dictionary containing:
+            - success (bool): Whether the variable was deleted
+            - variable_name (str): Name of the deleted variable
+            - removed_node_count (int): How many VariableGet/Set nodes were
+              cleaned up across event graphs and function graphs
+            - error (str): Error message if failed (e.g. variable not found
+              or is inherited)
+
+    Example:
+        >>> create_variable(unreal, "MyBP", "_probe", "float")
+        >>> delete_variable(unreal, "MyBP", "_probe")
+        {'success': True, 'variable_name': '_probe', 'removed_node_count': 0, ...}
+    """
+    try:
+        params = {
+            "blueprint_name": blueprint_name,
+            "variable_name": variable_name,
+        }
+        response = unreal_connection.send_command("delete_variable", params)
+        if response.get("success"):
+            logger.info(
+                f"Deleted variable '{variable_name}' from {blueprint_name} "
+                f"(removed {response.get('removed_node_count', 0)} reference node(s))"
+            )
+        else:
+            logger.error(
+                f"Failed to delete variable: {response.get('error', 'Unknown error')}"
+            )
+        return response
+    except Exception as e:
+        logger.error(f"Exception in delete_variable: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def create_float_variable(

@@ -369,6 +369,91 @@ def set_node_property(
         }
 
 
+def set_pin_default_value(
+    unreal_connection,
+    blueprint_name: str,
+    node_id: str,
+    pin_name: str,
+    default_value: Optional[str] = None,
+    default_object: Optional[str] = None,
+    default_text_value: Optional[str] = None,
+    function_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Set a literal default value on a pin of an existing Blueprint node.
+
+    Mirrors the editor's in-pin literal box / class-picker dropdown / text
+    entry. Needed because many nodes (Get All Actors Of Class, Spawn Actor,
+    Cast, math constants, enum result pins, etc.) rely on pin defaults
+    rather than wired inputs — without this tool every MCP-driven Blueprint
+    needs a manual editor pass to set those literals.
+
+    UE5 pins have three independent default slots; pass whichever applies
+    to the pin's type:
+      - ``default_value`` — string literal for primitives (bool/int/float/
+        byte/enum-name), and for class pins use the full ``/Script/...`` path.
+      - ``default_object`` — UObject path (loaded via LoadObject) for object
+        or asset reference pins.
+      - ``default_text_value`` — string body for FText pins.
+
+    At least one of the three must be provided. The C++ side calls the
+    UEdGraphSchema_K2 ``TrySetDefault*`` helpers so type mismatches are
+    rejected with a clear error.
+
+    Args:
+        unreal_connection: Connection to Unreal Engine
+        blueprint_name: Path or name of the Blueprint
+        node_id: NodeGuid or GetName() of the target node
+        pin_name: Name of the pin on that node (e.g. "ActorClass")
+        default_value: String literal for primitives / enum / class paths (optional)
+        default_object: UObject path for object/asset refs (optional)
+        default_text_value: Body string for FText pins (optional)
+        function_name: Function graph name (optional, null = EventGraph)
+
+    Returns:
+        Dictionary with:
+            - success (bool)
+            - node_id, pin_name (str)
+            - default_value / default_object / default_text_value: the actually
+              stored values after the schema's validation (truthful echo)
+            - error (str) on failure
+    """
+    if default_value is None and default_object is None and default_text_value is None:
+        return {
+            "success": False,
+            "error": "At least one of default_value, default_object, or default_text_value is required",
+        }
+
+    try:
+        params = {
+            "blueprint_name": blueprint_name,
+            "node_id": node_id,
+            "pin_name": pin_name,
+        }
+        if default_value is not None:
+            params["default_value"] = default_value
+        if default_object is not None:
+            params["default_object"] = default_object
+        if default_text_value is not None:
+            params["default_text_value"] = default_text_value
+        if function_name is not None:
+            params["function_name"] = function_name
+
+        response = unreal_connection.send_command("set_pin_default_value", params)
+        if response.get("success"):
+            logger.info(
+                f"Set pin '{pin_name}' default on node '{node_id}' in {blueprint_name}"
+            )
+        else:
+            logger.error(
+                f"Failed to set pin default: {response.get('error', 'Unknown error')}"
+            )
+        return response
+    except Exception as e:
+        logger.error(f"Exception in set_pin_default_value: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
 # ============================================================================
 # Convenience functions for common semantic actions
 # ============================================================================
