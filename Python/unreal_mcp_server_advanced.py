@@ -2086,6 +2086,7 @@ def add_node(
     event_type: str = "BeginPlay",
     variable_name: str = "",
     target_function: str = "",
+    target_class: Optional[str] = None,
     target_blueprint: Optional[str] = None,
     function_name: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -2147,8 +2148,17 @@ def add_node(
         event_type: For Event nodes, the event name (BeginPlay, Tick, Destroyed, etc.)
         variable_name: For Variable nodes, the variable name
         target_function: For CallFunction nodes, the function to call
+        target_class: For CallFunction nodes, full path to the class that owns the
+            function (e.g. "/Script/Engine.KismetSystemLibrary" or
+            "/Script/MyModule.MyBlueprintFunctionLibrary"). REQUIRED for static
+            UBlueprintFunctionLibrary functions and any UFUNCTION declared on a
+            class other than the Blueprint itself. Short names are accepted as a
+            fallback. When omitted, the node falls back to engine math/system
+            libraries and then to a self-member call on the owning Blueprint.
         target_blueprint: For CallFunction nodes, optional path to target Blueprint
-        function_name: Optional name of function graph to add node to (if None, uses EventGraph)
+        function_name: Function GRAPH (not call target) to insert this node into.
+            Defaults to the EventGraph. For CallFunction nodes the call target is
+            ``target_function`` / ``target_class`` — do not pass that here.
 
     Returns:
         Dictionary with success status, node_id, and position
@@ -2176,6 +2186,8 @@ def add_node(
             node_params["variable_name"] = variable_name
         if target_function:
             node_params["target_function"] = target_function
+        if target_class:
+            node_params["target_class"] = target_class
         if target_blueprint:
             node_params["target_blueprint"] = target_blueprint
         if function_name:
@@ -2245,9 +2257,11 @@ def create_variable(
     variable_name: str,
     variable_type: str,
     default_value: Any = None,
+    is_editable: Optional[bool] = None,
     is_public: bool = False,
     tooltip: str = "",
-    category: str = "Default"
+    category: str = "Default",
+    variable_subtype_class: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Create a variable in a Blueprint.
@@ -2257,11 +2271,21 @@ def create_variable(
     Args:
         blueprint_name: Name of the Blueprint to modify
         variable_name: Name of the variable to create
-        variable_type: Type of the variable ("bool", "int", "float", "string", "vector", "rotator")
+        variable_type: Type of the variable. Primitives: "bool", "int", "int64", "byte",
+            "float", "double", "string", "name", "text". Built-in structs: "vector",
+            "rotator", "transform". Reference types (REQUIRE variable_subtype_class):
+            "object", "class", "soft_object", "soft_class", "interface", "struct", "enum".
+            Unsupported strings return an explicit error rather than silently downgrading.
         default_value: Default value for the variable (optional)
-        is_public: Whether the variable should be public/editable (default: False)
+        is_editable: Instance Editable on actor instances (CPF_Edit). Matches the field
+            name reported by read-side APIs. Preferred over ``is_public``.
+        is_public: Deprecated alias for ``is_editable`` retained for backward compatibility.
         tooltip: Tooltip text for the variable (optional)
         category: Category for organizing variables (default: "Default")
+        variable_subtype_class: For object/class/struct/enum/interface variables, the
+            full UClass / UScriptStruct / UEnum path (e.g. "/Script/Engine.SplineComponent").
+            Short names accepted as fallback. Required when ``variable_type`` is a
+            reference/struct/enum type — request fails otherwise.
 
     Returns:
         Dictionary with success status and variable details
@@ -2277,9 +2301,11 @@ def create_variable(
             variable_name,
             variable_type,
             default_value,
-            is_public,
-            tooltip,
-            category
+            is_editable=is_editable,
+            is_public=is_public,
+            tooltip=tooltip,
+            category=category,
+            variable_subtype_class=variable_subtype_class,
         )
 
         return result
@@ -2293,8 +2319,10 @@ def set_blueprint_variable_properties(
     variable_name: str,
     var_name: Optional[str] = None,
     var_type: Optional[str] = None,
+    variable_subtype_class: Optional[str] = None,
     is_blueprint_readable: Optional[bool] = None,
     is_blueprint_writable: Optional[bool] = None,
+    is_editable: Optional[bool] = None,
     is_public: Optional[bool] = None,
     is_editable_in_instance: Optional[bool] = None,
     tooltip: Optional[str] = None,
@@ -2429,27 +2457,29 @@ def set_blueprint_variable_properties(
             unreal,
             blueprint_name,
             variable_name,
-            var_name,
-            var_type,
-            is_blueprint_readable,
-            is_blueprint_writable,
-            is_public,
-            is_editable_in_instance,
-            tooltip,
-            category,
-            default_value,
-            expose_on_spawn,
-            expose_to_cinematics,
-            slider_range_min,
-            slider_range_max,
-            value_range_min,
-            value_range_max,
-            units,
-            bitmask,
-            bitmask_enum,
-            replication_enabled,
-            replication_condition,
-            is_private
+            var_name=var_name,
+            var_type=var_type,
+            variable_subtype_class=variable_subtype_class,
+            is_blueprint_readable=is_blueprint_readable,
+            is_blueprint_writable=is_blueprint_writable,
+            is_editable=is_editable,
+            is_public=is_public,
+            is_editable_in_instance=is_editable_in_instance,
+            tooltip=tooltip,
+            category=category,
+            default_value=default_value,
+            expose_on_spawn=expose_on_spawn,
+            expose_to_cinematics=expose_to_cinematics,
+            slider_range_min=slider_range_min,
+            slider_range_max=slider_range_max,
+            value_range_min=value_range_min,
+            value_range_max=value_range_max,
+            units=units,
+            bitmask=bitmask,
+            bitmask_enum=bitmask_enum,
+            replication_enabled=replication_enabled,
+            replication_condition=replication_condition,
+            is_private=is_private,
         )
 
         return result

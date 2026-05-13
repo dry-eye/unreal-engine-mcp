@@ -228,24 +228,42 @@ def add_call_function_node(
     target_function: str,
     pos_x: float = 0,
     pos_y: float = 0,
-    target_blueprint: Optional[str] = None
+    target_class: Optional[str] = None,
+    target_blueprint: Optional[str] = None,
+    function_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Add a Call Function node to call a Blueprint function.
+    Add a Call Function node to call a Blueprint or C++ function.
 
     Args:
         unreal_connection: Connection to Unreal Engine
-        blueprint_name: Name of the Blueprint containing the EventGraph
+        blueprint_name: Name of the Blueprint to insert the node into
         target_function: Name of the function to call
         pos_x: X position in graph
         pos_y: Y position in graph
-        target_blueprint: Optional path to target Blueprint (defaults to same blueprint)
+        target_class: Full class path of the function owner for external C++ calls,
+            e.g. "/Script/Engine.KismetSystemLibrary" or
+            "/Script/WheeledVehicleCoreRuntime.VehicleAutoTestLibrary". Required for
+            ``UBlueprintFunctionLibrary`` statics and other off-blueprint UFUNCTIONs.
+            Short names accepted as a fallback. When omitted the node falls back to
+            engine math/system libraries and then to a self-member call on the
+            Blueprint that owns the graph.
+        target_blueprint: Optional path to a target Blueprint (legacy alias).
+        function_name: Optional function graph name to insert the node into. This
+            is NOT the call target — it picks which function graph receives the node.
+            Defaults to the EventGraph when not provided.
 
     Returns:
         Dictionary containing node_id and status
 
     Example:
-        >>> add_call_function_node(unreal, "MyActor", "MyFunction", 400, 0)
+        >>> add_call_function_node(
+        ...     unreal,
+        ...     "/Game/Test/FT_VehicleDrive",
+        ...     "BeginAutoTest",
+        ...     pos_x=96, pos_y=208,
+        ...     target_class="/Script/WheeledVehicleCoreRuntime.VehicleAutoTestLibrary",
+        ... )
     """
     node_params = {
         "pos_x": pos_x,
@@ -253,8 +271,12 @@ def add_call_function_node(
         "target_function": target_function
     }
 
+    if target_class:
+        node_params["target_class"] = target_class
     if target_blueprint:
         node_params["target_blueprint"] = target_blueprint
+    if function_name:
+        node_params["function_name"] = function_name
 
     return add_node(
         unreal_connection,
