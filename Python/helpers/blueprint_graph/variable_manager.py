@@ -16,29 +16,41 @@ def create_variable(
     variable_name: str,
     variable_type: str,
     default_value: Any = None,
+    is_editable: Optional[bool] = None,
     is_public: bool = False,
     tooltip: str = "",
-    category: str = "Default"
+    category: str = "Default",
+    variable_subtype_class: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Create a variable in a Blueprint.
-    
+
     Args:
         unreal_connection: Connection to Unreal Engine
         blueprint_name: Name of the Blueprint to modify
         variable_name: Name of the variable to create
-        variable_type: Type of the variable ("bool", "int", "float", "string", "vector", "rotator")
+        variable_type: Type of the variable. Primitive: "bool", "int", "int64", "byte",
+            "float", "double", "string", "name", "text". Built-in structs: "vector",
+            "rotator", "transform". Reference types (require ``variable_subtype_class``):
+            "object", "class", "soft_object", "soft_class", "interface".
+            Asset-backed: "struct" / "enum" (also require ``variable_subtype_class``).
         default_value: Default value for the variable (optional)
-        is_public: Whether the variable should be public/editable (default: False)
+        is_editable: Whether the variable is Instance Editable (maps to CPF_Edit).
+            Matches the field name returned by read-side APIs (``is_editable``).
+            Falls back to ``is_public`` when not provided.
+        is_public: Deprecated alias for ``is_editable``. Retained for backward compatibility.
         tooltip: Tooltip text for the variable (optional)
         category: Category for organizing variables (default: "Default")
-    
+        variable_subtype_class: For object/class/struct/enum/interface variables,
+            full path to the underlying type (e.g. "/Script/Engine.SplineComponent").
+            Short names are accepted as a fallback.
+
     Returns:
         Dictionary containing:
             - success (bool): Whether operation succeeded
             - variable (dict): Variable details if successful
             - error (str): Error message if failed
-    
+
     Example:
         >>> result = create_variable(
         ...     unreal,
@@ -46,9 +58,9 @@ def create_variable(
         ...     "Health",
         ...     "float",
         ...     100.0,
-        ...     True,
-        ...     "Player health points",
-        ...     "Stats"
+        ...     is_editable=True,
+        ...     tooltip="Player health points",
+        ...     category="Stats",
         ... )
         >>> print(result["variable"]["name"])
         'Health'
@@ -59,15 +71,19 @@ def create_variable(
             "variable_name": variable_name,
             "variable_type": variable_type
         }
-        
+
         if default_value is not None:
             params["default_value"] = default_value
-        if is_public:
+        if is_editable is not None:
+            params["is_editable"] = is_editable
+        elif is_public:
             params["is_public"] = is_public
         if tooltip:
             params["tooltip"] = tooltip
         if category != "Default":
             params["category"] = category
+        if variable_subtype_class:
+            params["variable_subtype_class"] = variable_subtype_class
         
         response = unreal_connection.send_command("create_variable", params)
         
@@ -96,8 +112,10 @@ def set_blueprint_variable_properties(
     variable_name: str,
     var_name: Optional[str] = None,
     var_type: Optional[str] = None,
+    variable_subtype_class: Optional[str] = None,
     is_blueprint_readable: Optional[bool] = None,
     is_blueprint_writable: Optional[bool] = None,
+    is_editable: Optional[bool] = None,
     is_public: Optional[bool] = None,
     is_editable_in_instance: Optional[bool] = None,
     tooltip: Optional[str] = None,
@@ -162,10 +180,14 @@ def set_blueprint_variable_properties(
             params["var_name"] = var_name
         if var_type is not None:
             params["var_type"] = var_type
+        if variable_subtype_class is not None:
+            params["variable_subtype_class"] = variable_subtype_class
         if is_blueprint_readable is not None:
             params["is_blueprint_readable"] = is_blueprint_readable
         if is_blueprint_writable is not None:
             params["is_blueprint_writable"] = is_blueprint_writable
+        if is_editable is not None:
+            params["is_editable"] = is_editable
         if is_public is not None:
             params["is_public"] = is_public
         if is_editable_in_instance is not None:
@@ -255,9 +277,9 @@ def create_float_variable(
         variable_name,
         "float",
         default_value,
-        is_public,
-        tooltip,
-        category
+        is_public=is_public,
+        tooltip=tooltip,
+        category=category,
     )
 
 
@@ -294,9 +316,9 @@ def create_int_variable(
         variable_name,
         "int",
         default_value,
-        is_public,
-        tooltip,
-        category
+        is_public=is_public,
+        tooltip=tooltip,
+        category=category,
     )
 
 
@@ -333,9 +355,9 @@ def create_bool_variable(
         variable_name,
         "bool",
         default_value,
-        is_public,
-        tooltip,
-        category
+        is_public=is_public,
+        tooltip=tooltip,
+        category=category,
     )
 
 
@@ -372,9 +394,9 @@ def create_string_variable(
         variable_name,
         "string",
         default_value,
-        is_public,
-        tooltip,
-        category
+        is_public=is_public,
+        tooltip=tooltip,
+        category=category,
     )
 
 
@@ -414,9 +436,9 @@ def create_vector_variable(
         variable_name,
         "vector",
         default_value,
-        is_public,
-        tooltip,
-        category
+        is_public=is_public,
+        tooltip=tooltip,
+        category=category,
     )
 
 
@@ -456,7 +478,7 @@ def create_rotator_variable(
         variable_name,
         "rotator",
         default_value,
-        is_public,
-        tooltip,
-        category
+        is_public=is_public,
+        tooltip=tooltip,
+        category=category,
     )
