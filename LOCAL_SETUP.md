@@ -12,22 +12,19 @@ For the full hosted Flop MCP with 50+ advanced tools, see the [main README](READ
 
 ## 1. Setup Options
 
-**Option A: Use the Pre-Built Project (Recommended for Quick Start)**
-```bash
-git clone https://github.com/flopperam/unreal-engine-mcp.git
-cd unreal-engine-mcp
-
-# Open FlopperamUnrealMCP/FlopperamUnrealMCP.uproject
-# The plugin is already installed and enabled
-```
-
-**Option B: Add Plugin to Your Existing Project**
+**Option A: Add Plugin to Your Existing Project**
 ```bash
 cp -r UnrealMCP/ YourProject/Plugins/
 
 # Enable in Unreal Editor
 # Edit → Plugins → Search "UnrealMCP" → Enable → Restart Editor
 ```
+
+**Option B: Share the Plugin via NTFS Junction (Windows, multi-project)**
+
+If you want to use the same plugin source across several UE projects without
+copying, use the junction workflow described in [FORK.md](FORK.md). One master
+`UnrealMCP/` directory, junctioned into each project's `Plugins/`.
 
 **Option C: Install for All Projects**
 ```bash
@@ -128,22 +125,25 @@ Replace `YOUR_XCODE_VERSION` with your major Xcode version from Step 1.
 
 ### Step 3: Compile the Plugin
 
-Run the Unreal Build Tool to compile the project:
+Run the Unreal Build Tool against any UE project that has `UnrealMCP/`
+installed (copied or junctioned) under `Plugins/`:
 
 ```bash
 "/Users/Shared/Epic Games/UE_5.X/Engine/Build/BatchFiles/Mac/Build.sh" \
   UnrealEditor Mac Development \
-  -Project="/path/to/unreal-engine-mcp/FlopperamUnrealMCP/FlopperamUnrealMCP.uproject" \
+  -Project="/path/to/YourProject/YourProject.uproject" \
   -WaitMutex
 ```
 
 Replace:
 - `UE_5.X` with your Unreal Engine version (e.g., `UE_5.5`)
-- `/path/to/unreal-engine-mcp/` with the actual path to your cloned repository
+- `/path/to/YourProject/` with the path to your UE project (the one that
+  contains `Plugins/UnrealMCP/` via Option A or B above)
 
 ### Step 4: Open the Project
 
-Once compilation succeeds, you can open `FlopperamUnrealMCP.uproject` in Unreal Engine.
+Once compilation succeeds, open your UE project. The `UnrealMCP` plugin
+should appear under Edit → Plugins; enable it and restart the editor.
 
 ---
 
