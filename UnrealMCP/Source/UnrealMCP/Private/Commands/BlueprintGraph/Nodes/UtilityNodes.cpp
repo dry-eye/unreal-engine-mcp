@@ -101,8 +101,12 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 	//   2. Common engine libraries as fallback (KismetSystemLibrary, KismetMathLibrary).
 	//   3. Self-member on the Blueprint that owns this graph (matches the BP editor's
 	//      "Call Function on Self" behavior).
+	// Accept both "target_class" (preferred) and "target_blueprint" (alias) so callers
+	// don't need to know which key name the C++ layer expects.
 	FString ClassName;
-	const bool bHasTargetClass = Params->TryGetStringField(TEXT("target_class"), ClassName) && !ClassName.IsEmpty();
+	const bool bHasTargetClass =
+		(Params->TryGetStringField(TEXT("target_class"),     ClassName) && !ClassName.IsEmpty()) ||
+		(Params->TryGetStringField(TEXT("target_blueprint"), ClassName) && !ClassName.IsEmpty());
 
 	UFunction* TargetFunc = nullptr;
 	UClass* ResolvedClass = nullptr;

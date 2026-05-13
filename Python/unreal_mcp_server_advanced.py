@@ -2207,6 +2207,9 @@ def add_node(
             node_params["target_class"] = target_class
         if target_blueprint:
             node_params["target_blueprint"] = target_blueprint
+            # target_blueprint is a UI-friendly alias for target_class; C++ reads "target_class"
+            if not target_class:
+                node_params["target_class"] = target_blueprint
         if function_name:
             node_params["function_name"] = function_name
 
