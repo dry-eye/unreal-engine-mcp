@@ -33,9 +33,20 @@ public:
 private:
     /**
      * Converts a type string to FEdGraphPinType
-     * Supported types: bool, int, float, string, vector, rotator
+     * Supported types: bool, int, int64, byte, float, double, real, string, name, text,
+     *                  vector, rotator, transform, object, class, soft_object, soft_class,
+     *                  interface, struct, enum
+     * For object/class/interface/soft_object/soft_class/struct/enum, SubtypeClassPath
+     * must reference a loadable UClass / UScriptStruct / UEnum (full path preferred,
+     * e.g. "/Script/Engine.SplineComponent").
+     *
+     * @return true if the type was resolved; false sets OutError with a diagnostic.
      */
-    static FEdGraphPinType GetPinTypeFromString(const FString& TypeString);
+    static bool ResolvePinType(
+        const FString& TypeString,
+        const FString& SubtypeClassPath,
+        FEdGraphPinType& OutPinType,
+        FString& OutError);
 
     /**
      * Sets the default value of a variable

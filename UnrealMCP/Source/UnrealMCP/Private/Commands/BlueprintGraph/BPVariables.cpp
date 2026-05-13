@@ -18,9 +18,23 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
     FString VariableName = Params->GetStringField(TEXT("variable_name"));
     FString VariableType = Params->GetStringField(TEXT("variable_type"));
 
-    bool IsPublic = Params->HasField(TEXT("is_public")) ? Params->GetBoolField(TEXT("is_public")) : false;
+    // is_editable and is_public both map to CPF_Edit (Instance Editable). The read-side
+    // API reports this flag as `is_editable`, so we accept that name as the primary write
+    // alias and keep `is_public` for backward compatibility.
+    bool IsEditable = false;
+    if (Params->HasField(TEXT("is_editable")))
+    {
+        IsEditable = Params->GetBoolField(TEXT("is_editable"));
+    }
+    else if (Params->HasField(TEXT("is_public")))
+    {
+        IsEditable = Params->GetBoolField(TEXT("is_public"));
+    }
     FString Tooltip = Params->HasField(TEXT("tooltip")) ? Params->GetStringField(TEXT("tooltip")) : TEXT("");
     FString Category = Params->HasField(TEXT("category")) ? Params->GetStringField(TEXT("category")) : TEXT("Default");
+    FString SubtypeClassPath = Params->HasField(TEXT("variable_subtype_class"))
+        ? Params->GetStringField(TEXT("variable_subtype_class"))
+        : TEXT("");
 
     UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
 
@@ -31,7 +45,14 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
         return Result;
     }
 
-    FEdGraphPinType VarType = GetPinTypeFromString(VariableType);
+    FEdGraphPinType VarType;
+    FString TypeError;
+    if (!ResolvePinType(VariableType, SubtypeClassPath, VarType, TypeError))
+    {
+        Result->SetBoolField("success", false);
+        Result->SetStringField("error", TypeError);
+        return Result;
+    }
     FName VarName = FName(*VariableName);
 
     if (FBlueprintEditorUtils::AddMemberVariable(Blueprint, VarName, VarType))
@@ -40,7 +61,7 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
         Variable.FriendlyName = VariableName;
         Variable.Category = FText::FromString(Category);
         Variable.PropertyFlags = CPF_BlueprintVisible | CPF_BlueprintReadOnly;
-        if (IsPublic)
+        if (IsEditable)
         {
             Variable.PropertyFlags |= CPF_Edit;
         }
@@ -81,7 +102,12 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
         TSharedPtr<FJsonObject> VarInfo = MakeShared<FJsonObject>();
         VarInfo->SetStringField("name", VariableName);
         VarInfo->SetStringField("type", VariableType);
-        VarInfo->SetBoolField("is_public", IsPublic);
+        if (!SubtypeClassPath.IsEmpty())
+        {
+            VarInfo->SetStringField("subtype_class", SubtypeClassPath);
+        }
+        VarInfo->SetBoolField("is_editable", IsEditable);
+        VarInfo->SetBoolField("is_public", IsEditable);
         VarInfo->SetStringField("category", Category);
 
         Result->SetObjectField("variable", VarInfo);
@@ -144,9 +170,23 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
     if (Params->HasField(TEXT("var_type")))
     {
         FString TypeString = Params->GetStringField(TEXT("var_type"));
-        FEdGraphPinType NewType = GetPinTypeFromString(TypeString);
+        FString SubtypeClassPath = Params->HasField(TEXT("variable_subtype_class"))
+            ? Params->GetStringField(TEXT("variable_subtype_class"))
+            : TEXT("");
+        FEdGraphPinType NewType;
+        FString TypeError;
+        if (!ResolvePinType(TypeString, SubtypeClassPath, NewType, TypeError))
+        {
+            Result->SetBoolField("success", false);
+            Result->SetStringField("error", TypeError);
+            return Result;
+        }
         VarDesc->VarType = NewType;
         UpdatedProperties->SetStringField("var_type", TypeString);
+        if (!SubtypeClassPath.IsEmpty())
+        {
+            UpdatedProperties->SetStringField("variable_subtype_class", SubtypeClassPath);
+        }
     }
 
     // Update is_blueprint_writable (Set node)
@@ -164,19 +204,26 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
         UpdatedProperties->SetBoolField("is_blueprint_writable", bIsWritable);
     }
 
-    // Update is_public
-    if (Params->HasField(TEXT("is_public")))
+    // Update is_editable (preferred) / is_public (legacy alias) - both map to CPF_Edit
     {
-        bool bIsPublic = Params->GetBoolField(TEXT("is_public"));
-        if (bIsPublic)
+        const bool bHasEditable = Params->HasField(TEXT("is_editable"));
+        const bool bHasPublic = Params->HasField(TEXT("is_public"));
+        if (bHasEditable || bHasPublic)
         {
-            VarDesc->PropertyFlags |= CPF_Edit;
+            const bool bIsEditable = bHasEditable
+                ? Params->GetBoolField(TEXT("is_editable"))
+                : Params->GetBoolField(TEXT("is_public"));
+            if (bIsEditable)
+            {
+                VarDesc->PropertyFlags |= CPF_Edit;
+            }
+            else
+            {
+                VarDesc->PropertyFlags &= ~CPF_Edit;
+            }
+            UpdatedProperties->SetBoolField("is_editable", bIsEditable);
+            UpdatedProperties->SetBoolField("is_public", bIsEditable);
         }
-        else
-        {
-            VarDesc->PropertyFlags &= ~CPF_Edit;
-        }
-        UpdatedProperties->SetBoolField("is_public", bIsPublic);
     }
 
     // Update is_editable_in_instance (opposite of CPF_DisableEditOnInstance)
@@ -393,45 +440,237 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
     return Result;
 }
 
-FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
+namespace
 {
-    FEdGraphPinType PinType;
+    // Resolve a textual class/struct/enum reference to its UObject. Accepts full
+    // package paths (preferred, e.g. "/Script/Engine.SplineComponent") and falls
+    // back to a short-name lookup.
+    template <typename TObject>
+    TObject* ResolveTypeObject(const FString& Path)
+    {
+        if (Path.IsEmpty())
+        {
+            return nullptr;
+        }
+        TObject* Resolved = LoadObject<TObject>(nullptr, *Path);
+        if (!Resolved)
+        {
+            // Short name fallback (e.g. "SplineComponent", "Pawn").
+            Resolved = FindFirstObject<TObject>(*Path, EFindFirstObjectOptions::NativeFirst);
+        }
+        return Resolved;
+    }
+}
 
-    if (TypeString == "bool")
+bool FBPVariables::ResolvePinType(
+    const FString& TypeString,
+    const FString& SubtypeClassPath,
+    FEdGraphPinType& OutPinType,
+    FString& OutError)
+{
+    OutPinType = FEdGraphPinType();
+    OutError.Reset();
+
+    auto RequiresSubtype = [&](const TCHAR* Kind, const TCHAR* Example) -> bool
     {
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+        if (SubtypeClassPath.IsEmpty())
+        {
+            OutError = FString::Printf(
+                TEXT("variable_type='%s' requires variable_subtype_class (%s e.g. %s)"),
+                *TypeString, Kind, Example);
+            return false;
+        }
+        return true;
+    };
+
+    if (TypeString.Equals(TEXT("bool"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
     }
-    else if (TypeString == "int")
+    else if (TypeString.Equals(TEXT("int"), ESearchCase::IgnoreCase)
+        || TypeString.Equals(TEXT("int32"), ESearchCase::IgnoreCase)
+        || TypeString.Equals(TEXT("integer"), ESearchCase::IgnoreCase))
     {
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Int;
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Int;
     }
-    else if (TypeString == "float")
+    else if (TypeString.Equals(TEXT("int64"), ESearchCase::IgnoreCase))
     {
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
-        PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Int64;
     }
-    else if (TypeString == "string")
+    else if (TypeString.Equals(TEXT("byte"), ESearchCase::IgnoreCase))
     {
-        PinType.PinCategory = UEdGraphSchema_K2::PC_String;
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Byte;
     }
-    else if (TypeString == "vector")
+    else if (TypeString.Equals(TEXT("float"), ESearchCase::IgnoreCase)
+        || TypeString.Equals(TEXT("real"), ESearchCase::IgnoreCase))
     {
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-        PinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Real;
+        OutPinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
     }
-    else if (TypeString == "rotator")
+    else if (TypeString.Equals(TEXT("double"), ESearchCase::IgnoreCase))
     {
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
-        PinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Real;
+        OutPinType.PinSubCategory = UEdGraphSchema_K2::PC_Double;
+    }
+    else if (TypeString.Equals(TEXT("string"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_String;
+    }
+    else if (TypeString.Equals(TEXT("name"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Name;
+    }
+    else if (TypeString.Equals(TEXT("text"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Text;
+    }
+    else if (TypeString.Equals(TEXT("vector"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+        OutPinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
+    }
+    else if (TypeString.Equals(TEXT("rotator"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+        OutPinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();
+    }
+    else if (TypeString.Equals(TEXT("transform"), ESearchCase::IgnoreCase))
+    {
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+        OutPinType.PinSubCategoryObject = TBaseStructure<FTransform>::Get();
+    }
+    else if (TypeString.Equals(TEXT("object"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("object reference"), TEXT("/Script/Engine.SplineComponent")))
+        {
+            return false;
+        }
+        UClass* SubClass = ResolveTypeObject<UClass>(SubtypeClassPath);
+        if (!SubClass)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UClass"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+        OutPinType.PinSubCategoryObject = SubClass;
+    }
+    else if (TypeString.Equals(TEXT("class"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("class reference"), TEXT("/Script/Engine.Pawn")))
+        {
+            return false;
+        }
+        UClass* SubClass = ResolveTypeObject<UClass>(SubtypeClassPath);
+        if (!SubClass)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UClass"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Class;
+        OutPinType.PinSubCategoryObject = SubClass;
+    }
+    else if (TypeString.Equals(TEXT("soft_object"), ESearchCase::IgnoreCase)
+        || TypeString.Equals(TEXT("softobject"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("soft object reference"), TEXT("/Script/Engine.Texture2D")))
+        {
+            return false;
+        }
+        UClass* SubClass = ResolveTypeObject<UClass>(SubtypeClassPath);
+        if (!SubClass)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UClass"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_SoftObject;
+        OutPinType.PinSubCategoryObject = SubClass;
+    }
+    else if (TypeString.Equals(TEXT("soft_class"), ESearchCase::IgnoreCase)
+        || TypeString.Equals(TEXT("softclass"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("soft class reference"), TEXT("/Script/Engine.Pawn")))
+        {
+            return false;
+        }
+        UClass* SubClass = ResolveTypeObject<UClass>(SubtypeClassPath);
+        if (!SubClass)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UClass"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_SoftClass;
+        OutPinType.PinSubCategoryObject = SubClass;
+    }
+    else if (TypeString.Equals(TEXT("interface"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("interface"), TEXT("/Script/MyModule.MyInterface")))
+        {
+            return false;
+        }
+        UClass* SubClass = ResolveTypeObject<UClass>(SubtypeClassPath);
+        if (!SubClass)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UClass"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Interface;
+        OutPinType.PinSubCategoryObject = SubClass;
+    }
+    else if (TypeString.Equals(TEXT("struct"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("struct"), TEXT("/Script/Engine.HitResult")))
+        {
+            return false;
+        }
+        UScriptStruct* SubStruct = ResolveTypeObject<UScriptStruct>(SubtypeClassPath);
+        if (!SubStruct)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UScriptStruct"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+        OutPinType.PinSubCategoryObject = SubStruct;
+    }
+    else if (TypeString.Equals(TEXT("enum"), ESearchCase::IgnoreCase))
+    {
+        if (!RequiresSubtype(TEXT("enum"), TEXT("/Script/Engine.ETraceTypeQuery")))
+        {
+            return false;
+        }
+        UEnum* SubEnum = ResolveTypeObject<UEnum>(SubtypeClassPath);
+        if (!SubEnum)
+        {
+            OutError = FString::Printf(
+                TEXT("Could not resolve variable_subtype_class '%s' to a UEnum"),
+                *SubtypeClassPath);
+            return false;
+        }
+        OutPinType.PinCategory = UEdGraphSchema_K2::PC_Byte;
+        OutPinType.PinSubCategoryObject = SubEnum;
     }
     else
     {
-        // Défaut: float
-        PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
-        PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+        OutError = FString::Printf(
+            TEXT("Unsupported variable_type: '%s'. Supported: bool, int, int64, byte, float, double, "
+                 "string, name, text, vector, rotator, transform, object, class, soft_object, "
+                 "soft_class, interface, struct, enum"),
+            *TypeString);
+        return false;
     }
 
-    return PinType;
+    return true;
 }
 
 void FBPVariables::SetDefaultValue(FBPVariableDescription& Variable, const TSharedPtr<FJsonValue>& Value)
