@@ -707,16 +707,33 @@ def analyze_blueprint_graph(
     """
     Analyze a specific graph within a Blueprint (EventGraph, functions, etc.)
     and provide detailed information about nodes, connections, and execution flow.
-    
+
+    For each K2Node_Composite (collapsed/composite graph node) the response
+    includes a ``subgraph`` field with the recursively-serialized contents,
+    so callers can read into user-organised BPs without extra round-trips.
+
+    ``graph_name`` resolution order:
+        1. UbergraphPages by exact name (EventGraph etc.)
+        2. FunctionGraphs by exact name
+        3. Any composite sub-graph reachable from those, matched by:
+           - the composite node name (e.g. ``K2Node_Composite_0``)
+           - the BoundGraph name
+           - the composite's user-facing title (substring match — e.g.
+             passing ``"InitTrackSpline"`` finds the composite labelled
+             "InitTrackSpline\\nCollapsed Graph")
+           - the NodeGuid
+
     Args:
         blueprint_path: Full path to the Blueprint asset
-        graph_name: Name of the graph to analyze ("EventGraph", function name, etc.)
+        graph_name: Name of the graph to analyze ("EventGraph", function name,
+            composite node name, composite title, etc.)
         include_node_details: Include detailed node properties and settings
         include_pin_connections: Include all pin-to-pin connections
         trace_execution_flow: Trace the execution flow through the graph
-    
+
     Returns:
-        Dictionary with graph analysis including nodes, connections, and flow
+        Dictionary with graph analysis including nodes, connections, and flow.
+        Composite nodes carry a nested ``subgraph`` object (same shape).
     """
     unreal = get_unreal_connection()
     if not unreal:
