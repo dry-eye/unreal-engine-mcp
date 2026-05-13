@@ -6,11 +6,6 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
-#include "AnimStateMachineGraph.h"
-#include "AnimStateNode.h"
-#include "AnimStateTransitionNode.h"
-#include "AnimGraphNode_Base.h"
-#include "AnimGraphNode_StateMachineBase.h"
 
 FUnrealMCPAnimCommands::FUnrealMCPAnimCommands()
 {
