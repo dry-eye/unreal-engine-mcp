@@ -20,7 +20,8 @@ def create_variable(
     is_public: bool = False,
     tooltip: str = "",
     category: str = "Default",
-    variable_subtype_class: Optional[str] = None
+    variable_subtype_class: Optional[str] = None,
+    is_array: bool = False
 ) -> Dict[str, Any]:
     """
     Create a variable in a Blueprint.
@@ -44,6 +45,9 @@ def create_variable(
         variable_subtype_class: For object/class/struct/enum/interface variables,
             full path to the underlying type (e.g. "/Script/Engine.SplineComponent").
             Short names are accepted as a fallback.
+        is_array: When true, the variable is created as an Array container of
+            the resolved element type (e.g. ``TArray<FVehicleTestRecord>``).
+            Defaults to false (single value).
 
     Returns:
         Dictionary containing:
@@ -84,7 +88,9 @@ def create_variable(
             params["category"] = category
         if variable_subtype_class:
             params["variable_subtype_class"] = variable_subtype_class
-        
+        if is_array:
+            params["is_array"] = is_array
+
         response = unreal_connection.send_command("create_variable", params)
         
         if response.get("success"):
@@ -113,6 +119,7 @@ def set_blueprint_variable_properties(
     var_name: Optional[str] = None,
     var_type: Optional[str] = None,
     variable_subtype_class: Optional[str] = None,
+    is_array: Optional[bool] = None,
     is_blueprint_readable: Optional[bool] = None,
     is_blueprint_writable: Optional[bool] = None,
     is_editable: Optional[bool] = None,
@@ -182,6 +189,8 @@ def set_blueprint_variable_properties(
             params["var_type"] = var_type
         if variable_subtype_class is not None:
             params["variable_subtype_class"] = variable_subtype_class
+        if is_array is not None:
+            params["is_array"] = is_array
         if is_blueprint_readable is not None:
             params["is_blueprint_readable"] = is_blueprint_readable
         if is_blueprint_writable is not None:

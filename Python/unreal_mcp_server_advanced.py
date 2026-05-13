@@ -2261,7 +2261,8 @@ def create_variable(
     is_public: bool = False,
     tooltip: str = "",
     category: str = "Default",
-    variable_subtype_class: Optional[str] = None
+    variable_subtype_class: Optional[str] = None,
+    is_array: bool = False
 ) -> Dict[str, Any]:
     """
     Create a variable in a Blueprint.
@@ -2286,6 +2287,8 @@ def create_variable(
             full UClass / UScriptStruct / UEnum path (e.g. "/Script/Engine.SplineComponent").
             Short names accepted as fallback. Required when ``variable_type`` is a
             reference/struct/enum type — request fails otherwise.
+        is_array: Create the variable as an Array of the resolved element type
+            (e.g. ``TArray<FVehicleTestRecord>``). Defaults to False.
 
     Returns:
         Dictionary with success status and variable details
@@ -2306,6 +2309,7 @@ def create_variable(
             tooltip=tooltip,
             category=category,
             variable_subtype_class=variable_subtype_class,
+            is_array=is_array,
         )
 
         return result
@@ -2320,6 +2324,7 @@ def set_blueprint_variable_properties(
     var_name: Optional[str] = None,
     var_type: Optional[str] = None,
     variable_subtype_class: Optional[str] = None,
+    is_array: Optional[bool] = None,
     is_blueprint_readable: Optional[bool] = None,
     is_blueprint_writable: Optional[bool] = None,
     is_editable: Optional[bool] = None,
@@ -2460,6 +2465,7 @@ def set_blueprint_variable_properties(
             var_name=var_name,
             var_type=var_type,
             variable_subtype_class=variable_subtype_class,
+            is_array=is_array,
             is_blueprint_readable=is_blueprint_readable,
             is_blueprint_writable=is_blueprint_writable,
             is_editable=is_editable,

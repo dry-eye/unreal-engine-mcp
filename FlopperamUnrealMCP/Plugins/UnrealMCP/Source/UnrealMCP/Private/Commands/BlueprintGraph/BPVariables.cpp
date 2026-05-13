@@ -35,6 +35,9 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
     FString SubtypeClassPath = Params->HasField(TEXT("variable_subtype_class"))
         ? Params->GetStringField(TEXT("variable_subtype_class"))
         : TEXT("");
+    const bool bIsArray = Params->HasField(TEXT("is_array"))
+        ? Params->GetBoolField(TEXT("is_array"))
+        : false;
 
     UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
 
@@ -52,6 +55,10 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
         Result->SetBoolField("success", false);
         Result->SetStringField("error", TypeError);
         return Result;
+    }
+    if (bIsArray)
+    {
+        VarType.ContainerType = EPinContainerType::Array;
     }
     FName VarName = FName(*VariableName);
 
@@ -108,6 +115,7 @@ TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObjec
         }
         VarInfo->SetBoolField("is_editable", IsEditable);
         VarInfo->SetBoolField("is_public", IsEditable);
+        VarInfo->SetBoolField("is_array", bIsArray);
         VarInfo->SetStringField("category", Category);
 
         Result->SetObjectField("variable", VarInfo);
@@ -173,6 +181,12 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
         FString SubtypeClassPath = Params->HasField(TEXT("variable_subtype_class"))
             ? Params->GetStringField(TEXT("variable_subtype_class"))
             : TEXT("");
+        // is_array is only honoured alongside a var_type change. To toggle the
+        // array flag on an existing variable, send both var_type (same as current)
+        // and is_array=true/false.
+        const bool bIsArray = Params->HasField(TEXT("is_array"))
+            ? Params->GetBoolField(TEXT("is_array"))
+            : false;
         FEdGraphPinType NewType;
         FString TypeError;
         if (!ResolvePinType(TypeString, SubtypeClassPath, NewType, TypeError))
@@ -181,11 +195,19 @@ TSharedPtr<FJsonObject> FBPVariables::SetVariableProperties(const TSharedPtr<FJs
             Result->SetStringField("error", TypeError);
             return Result;
         }
+        if (bIsArray)
+        {
+            NewType.ContainerType = EPinContainerType::Array;
+        }
         VarDesc->VarType = NewType;
         UpdatedProperties->SetStringField("var_type", TypeString);
         if (!SubtypeClassPath.IsEmpty())
         {
             UpdatedProperties->SetStringField("variable_subtype_class", SubtypeClassPath);
+        }
+        if (Params->HasField(TEXT("is_array")))
+        {
+            UpdatedProperties->SetBoolField("is_array", bIsArray);
         }
     }
 
