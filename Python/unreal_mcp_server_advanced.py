@@ -750,6 +750,70 @@ def analyze_blueprint_graph(
         return {"success": False, "message": str(e)}
 
 @mcp.tool()
+def read_anim_blueprint(blueprint_path: str) -> Dict[str, Any]:
+    """
+    Read an Animation Blueprint asset: parent class, target skeleton,
+    function graphs (incl. AnimGraph), ubergraph pages, and nested
+    state machine sub-graphs with nodes/pins.
+
+    Args:
+        blueprint_path: Full path to the AnimBlueprint asset.
+
+    Returns:
+        Dict with graphs/nodes/pins structure.
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+    try:
+        logger.info(f"Reading AnimBlueprint: {blueprint_path}")
+        response = unreal.send_command("read_anim_blueprint", {"blueprint_path": blueprint_path})
+        return response or {"success": False, "message": "No response from Unreal"}
+    except Exception as e:
+        logger.error(f"read_anim_blueprint error: {e}")
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
+def read_control_rig(blueprint_path: str) -> Dict[str, Any]:
+    """
+    Read a Control Rig blueprint: all RigVM graphs (including event
+    graphs and functions), their nodes, pins (with defaults), and links.
+
+    Args:
+        blueprint_path: Full path to the ControlRigBlueprint asset.
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+    try:
+        logger.info(f"Reading ControlRig: {blueprint_path}")
+        response = unreal.send_command("read_control_rig", {"blueprint_path": blueprint_path})
+        return response or {"success": False, "message": "No response from Unreal"}
+    except Exception as e:
+        logger.error(f"read_control_rig error: {e}")
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
+def read_pcg_graph(graph_path: str) -> Dict[str, Any]:
+    """
+    Read a PCG graph asset: nodes (with settings class), input/output pins,
+    plus the special graph input/output node entries.
+
+    Args:
+        graph_path: Full path to the UPCGGraph asset.
+    """
+    unreal = get_unreal_connection()
+    if not unreal:
+        return {"success": False, "message": "Failed to connect to Unreal Engine"}
+    try:
+        logger.info(f"Reading PCG graph: {graph_path}")
+        response = unreal.send_command("read_pcg_graph", {"graph_path": graph_path})
+        return response or {"success": False, "message": "No response from Unreal"}
+    except Exception as e:
+        logger.error(f"read_pcg_graph error: {e}")
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
 def get_blueprint_variable_details(
     blueprint_path: str,
     variable_name: str = None

@@ -11,6 +11,9 @@
 #include "Commands/EpicUnrealMCPEditorCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
+#include "Commands/UnrealMCPAnimCommands.h"
+#include "Commands/UnrealMCPControlRigCommands.h"
+#include "Commands/UnrealMCPPCGCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -57,4 +60,7 @@ private:
 	TSharedPtr<FEpicUnrealMCPEditorCommands> EditorCommands;
 	TSharedPtr<FEpicUnrealMCPBlueprintCommands> BlueprintCommands;
 	TSharedPtr<FEpicUnrealMCPBlueprintGraphCommands> BlueprintGraphCommands;
-}; 
+	TSharedPtr<FUnrealMCPAnimCommands> AnimCommands;
+	TSharedPtr<FUnrealMCPControlRigCommands> ControlRigCommands;
+	TSharedPtr<FUnrealMCPPCGCommands> PCGCommands;
+};

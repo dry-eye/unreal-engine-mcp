@@ -68,7 +68,19 @@ public class UnrealMCP : ModuleRules
 				{
 					"PropertyEditor",      // For property editing
 					"ToolMenus",           // For editor UI
-					"BlueprintEditorLibrary" // For Blueprint utilities
+					"BlueprintEditorLibrary", // For Blueprint utilities
+					// AnimBlueprint read tools
+					"AnimGraph",
+					"Persona",
+					"AnimationBlueprintEditor",
+					// Control Rig read tools
+					"ControlRig",
+					"ControlRigDeveloper",
+					"RigVM",
+					"RigVMDeveloper",
+					// PCG read tools
+					"PCG",
+					"PCGEditor"
 				}
 			);
 		}
